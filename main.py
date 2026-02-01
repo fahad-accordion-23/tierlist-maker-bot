@@ -5,6 +5,7 @@ import os
 # Discord API
 import requests
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 # Coding
@@ -266,7 +267,14 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='$', intents=intents)
+class Bot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="$", intents=intents)
+        
+    async def setup_hook(self):    
+        await self.tree.sync()
+    
+bot = Bot()
 manager = TierlistManager()
 renderer = TierlistRenderer()
 
@@ -274,64 +282,62 @@ renderer = TierlistRenderer()
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
-@bot.command()
-async def hello(ctx) -> None:
-    await ctx.send("Hello!")
+@bot.tree.command(name="hello", description="Says hello (privately)")
+async def hello(interaction: discord.Interaction):
+    await interaction.response.send_message("Hello!", ephemeral=True)
 
-@bot.command()
-async def begin(ctx, name: str) -> None:
+@bot.tree.command(name="begin", description="Start a new tierlist")
+async def begin(interaction: discord.Interaction, name: str):
     result = manager.begin_tierlist(name)
-    await ctx.send(f"Result: {result.name}")
+    await interaction.response.send_message(f"Result: {result.name}", ephemeral=True)
 
-@bot.command()
-async def end(ctx) -> None:
+@bot.tree.command(name="end", description="End the current tierlist")
+async def end(interaction: discord.Interaction):
     result = manager.end_tierlist()
-    await ctx.send(f"Result: {result.name}")
+    await interaction.response.send_message(f"Result: {result.name}", ephemeral=True)
 
-@bot.command()
-async def add(ctx, member: discord.Member, tier_input: str) -> None:
+@bot.tree.command(name="add", description="Add a member to a specific tier")
+@app_commands.choices(tier=[
+    app_commands.Choice(name="S Tier", value="S"),
+    app_commands.Choice(name="A Tier", value="A"),
+    app_commands.Choice(name="B Tier", value="B"),
+    app_commands.Choice(name="C Tier", value="C"),
+    app_commands.Choice(name="D Tier", value="D"),
+    app_commands.Choice(name="F Tier", value="F"),
+])
+async def add(interaction: discord.Interaction, member: discord.Member, tier: app_commands.Choice[str]):
     try:
-        target_tier = Tier[tier_input.upper()]
+        target_tier = Tier[tier.value]
     except KeyError:
-        await ctx.send(f"Invalid Tier. Valid options: {[t.name for t in Tier]}")
+        await interaction.response.send_message("Invalid Tier.", ephemeral=True)
         return
 
     user_data = Member(name=member.display_name, avatar_url=member.display_avatar.url)
     result = manager.add_to_tierlist(member.id, user_data, target_tier)
     
     if result == TierlistError.SUCCESS:
-        await ctx.send(f"Added {member.display_name} to Tier {target_tier.name}")
+        await interaction.response.send_message(f"Added {member.display_name} to Tier {target_tier.name}", ephemeral=True)
     else:
-        await ctx.send(f"Error: {result.name}")
+        await interaction.response.send_message(f"Error: {result.name}", ephemeral=True)
 
-@bot.command()
-async def remove(ctx, member: discord.Member) -> None:
+@bot.tree.command(name="remove", description="Remove a member from the tierlist")
+async def remove(interaction: discord.Interaction, member: discord.Member):
     result = manager.remove_from_tierlist(member.id)
-    await ctx.send(f"Result: {result.name}")
+    await interaction.response.send_message(f"Result: {result.name}", ephemeral=True)
 
-@bot.command()
-async def show(ctx):
+@bot.tree.command(name="show", description="Render the current tierlist image")
+async def show(interaction: discord.Interaction):
     if not manager.currently_active:
-        await ctx.send("No active tierlist.")
+        await interaction.response.send_message("No active tierlist.", ephemeral=True)
         return
+        
+    await interaction.response.defer(thinking=True, ephemeral=True)
 
     active_list = manager.tierlists[manager.currently_active]
-    await ctx.send("Rendering...")
-    
     image_buffer = await renderer.render(active_list)
     
     file = discord.File(image_buffer, filename="tierlist.png")
-    await ctx.send(file=file)
-
-@bot.command()
-async def debug(ctx) -> None:
-    print(f"--- Debug ---")
-    print(f"Active: {manager.currently_active}")
-    for name, tierlist in manager.tierlists.items():
-        print(f"List: {name}")
-        for tier, users in tierlist.tiers.items():
-            print(f"  {tier.name}: {list(users.keys())}")
-    await ctx.send("Debug state printed to console.")
+    await interaction.followup.send(file=file, ephemeral=True)
 
 if token:
     bot.run(token)
